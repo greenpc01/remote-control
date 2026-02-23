@@ -10,10 +10,12 @@ from tkinter import scrolledtext
 try:
     from PIL import ImageGrab
     import pyautogui
+    import pyperclip
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pillow", "pyautogui", "pynput"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pillow", "pyautogui", "pynput", "pyperclip"])
     from PIL import ImageGrab
     import pyautogui
+    import pyperclip
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
@@ -98,7 +100,12 @@ def cmd_thread(conn, log):
                 if sk:
                     pyautogui.press(sk)
                 elif len(k) == 1:
-                    pyautogui.write(k, interval=0)
+                    # 클립보드 경유 붙여넣기 → 영어/한글/특수문자 모두 정확하게 입력됨
+                    prev = pyperclip.paste()        # 기존 클립보드 백업
+                    pyperclip.copy(k)
+                    pyautogui.hotkey("ctrl", "v")
+                    time.sleep(0.04)
+                    pyperclip.copy(prev)            # 클립보드 복원
 
             elif a == "key_combo":
                 pyautogui.hotkey(*cmd.get("keys", []))

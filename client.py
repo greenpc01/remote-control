@@ -95,6 +95,8 @@ class ClientApp:
         self.canvas = tk.Canvas(main, bg="#000000", cursor="crosshair",
                                 highlightthickness=0)
         self.canvas.pack(side="left", fill="both", expand=True)
+        # 캔버스 크기가 확정된 뒤 서버 해상도 정보 수신하도록 after 등록
+        self.root.after(200, lambda: None)
 
         # 마우스 이벤트
         self.canvas.bind("<Motion>",          self._mv)
@@ -194,10 +196,11 @@ class ClientApp:
     def _to_srv(self, cx, cy):
         cw = self.canvas.winfo_width()
         ch = self.canvas.winfo_height()
-        if cw <= 0 or ch <= 0: return int(cx), int(cy)
-        # 화면이 letterbox 없이 stretch되므로 단순 비율 변환
-        x = int(cx / cw * self.srv_w)
-        y = int(cy / ch * self.srv_h)
+        if cw <= 0 or ch <= 0:
+            return int(cx), int(cy)
+        # 캔버스 전체가 서버 화면에 1:1 매핑
+        x = max(0, min(int(cx / cw * self.srv_w), self.srv_w - 1))
+        y = max(0, min(int(cy / ch * self.srv_h), self.srv_h - 1))
         return x, y
 
     # ── 연결 / 해제 ───────────────────────────────────────────
@@ -341,7 +344,8 @@ class ClientApp:
         k = KMAP.get(e.keysym)
         if k:
             self._send({"action": "key_press", "key": k})
-        elif e.char and e.char.isprintable():
+        elif e.char and e.char.isprintable() and len(e.char) == 1:
+            # e.char 가 실제 입력 문자 (대소문자 구분, 한글 포함)
             self._send({"action": "key_press", "key": e.char})
 
     # ── 텍스트 전송 ───────────────────────────────────────────
