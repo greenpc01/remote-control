@@ -101,7 +101,9 @@ def _to_absolute(x, y):
 
 def _send_mouse(flags, x=None, y=None, data=0):
     if x is not None and y is not None:
-        ax, ay = _to_absolute(int(x), int(y))
+        x = int(x); y = int(y)
+        ctypes.windll.user32.SetCursorPos(x, y)
+        ax, ay = _to_absolute(x, y)
         flags |= MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE
     else:
         ax, ay = 0, 0

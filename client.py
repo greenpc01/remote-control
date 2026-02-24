@@ -16,6 +16,8 @@ AUTH_TOKEN = "CHANGE_ME_STRONG_TOKEN_32+"  # 서버와 동일하게
 
 # 게임 호환 모드: 클릭을 down/up 분리 대신 단일 click 이벤트로 전송
 GAME_COMPAT_CLICK = True
+# 게임 모드에서 지속 마우스 이동 이벤트 차단(입력 충돌 완화)
+GAME_BLOCK_MOUSE_MOVE = True
 
 def send_msg(sock, data: bytes):
     sock.sendall(struct.pack(">I", len(data)) + data)
@@ -320,6 +322,8 @@ class ClientApp:
 
     # mouse
     def _mv(self, e):
+        if GAME_BLOCK_MOUSE_MOVE:
+            return
         now = time.time()
         if now - self._last_mv_ts < self._mv_interval:
             return
