@@ -1,32 +1,45 @@
-# remote_server_v2_3_safe.py
-# pip install pillow pyautogui pyperclip pydirectinput
+# remote_server_v2_4_stable.py
+# 필요한 패키지(수동 설치 권장): pillow pyautogui pyperclip pydirectinput
 import socket, threading, struct, io, json, subprocess, sys, time
 import tkinter as tk
-from tkinter import scrolledtext
+from tkinter import scrolledtext, messagebox
 
-# 필수 패키지 우선 로드
+# 필수 패키지 로드 (실패 시 자동설치하지 않고 명확히 안내 후 종료)
+_missing = []
 try:
     from PIL import ImageGrab
-    import pyautogui
-    import pyperclip
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pillow", "pyautogui", "pyperclip"])
-    from PIL import ImageGrab
-    import pyautogui
-    import pyperclip
+except Exception:
+    _missing.append("pillow")
 
-# 선택 패키지(pydirectinput): 실패해도 서버는 실행되도록 처리
+try:
+    import pyautogui
+except Exception:
+    _missing.append("pyautogui")
+
+try:
+    import pyperclip
+except Exception:
+    _missing.append("pyperclip")
+
+if _missing:
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showerror(
+        "필수 모듈 누락",
+        "다음 패키지를 먼저 설치해주세요:\n\n"
+        + " ".join(_missing)
+        + "\n\n실행 명령:\npython -m pip install "
+        + " ".join(_missing),
+    )
+    raise SystemExit(1)
+
+# 선택 패키지(pydirectinput): 없어도 서버는 실행
 pydirectinput = None
 try:
     import pydirectinput as _pdi
     pydirectinput = _pdi
 except Exception:
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "pydirectinput"])
-        import pydirectinput as _pdi
-        pydirectinput = _pdi
-    except Exception:
-        pydirectinput = None
+    pydirectinput = None
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
