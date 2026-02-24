@@ -1,25 +1,38 @@
-# remote_server_v2_2.py
+# remote_server_v2_3_safe.py
 # pip install pillow pyautogui pyperclip pydirectinput
 import socket, threading, struct, io, json, subprocess, sys, time
 import tkinter as tk
 from tkinter import scrolledtext
 
+# 필수 패키지 우선 로드
 try:
     from PIL import ImageGrab
     import pyautogui
     import pyperclip
-    import pydirectinput
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pillow", "pyautogui", "pyperclip", "pydirectinput"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pillow", "pyautogui", "pyperclip"])
     from PIL import ImageGrab
     import pyautogui
     import pyperclip
-    import pydirectinput
+
+# 선택 패키지(pydirectinput): 실패해도 서버는 실행되도록 처리
+pydirectinput = None
+try:
+    import pydirectinput as _pdi
+    pydirectinput = _pdi
+except Exception:
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pydirectinput"])
+        import pydirectinput as _pdi
+        pydirectinput = _pdi
+    except Exception:
+        pydirectinput = None
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
-pydirectinput.FAILSAFE = False
-pydirectinput.PAUSE = 0
+if pydirectinput is not None:
+    pydirectinput.FAILSAFE = False
+    pydirectinput.PAUSE = 0
 
 HOST = "0.0.0.0"
 CMD_PORT = 9999
@@ -33,57 +46,63 @@ ALLOW_IP_PREFIXES = ["127.", "192.168.", "10.", "172.16.", "172.17.", "172.18.",
 ENABLE_SHELL = False  # 기본 OFF
 
 # 게임 호환 입력 모드 (리니지/DirectX 게임 대응)
-USE_DIRECT_INPUT = True
+USE_DIRECT_INPUT = pydirectinput is not None
+
+def _with_fallback(direct_fn, auto_fn):
+    if USE_DIRECT_INPUT and pydirectinput is not None:
+        try:
+            return direct_fn()
+        except Exception:
+            return auto_fn()
+    return auto_fn()
 
 def mouse_move(x, y):
-    if USE_DIRECT_INPUT:
-        pydirectinput.moveTo(x, y)
-    else:
-        pyautogui.moveTo(x, y)
+    return _with_fallback(
+        lambda: pydirectinput.moveTo(x, y),
+        lambda: pyautogui.moveTo(x, y),
+    )
 
 def mouse_down(x, y, btn="left"):
-    if USE_DIRECT_INPUT:
-        pydirectinput.moveTo(x, y)
-        pydirectinput.mouseDown(button=btn)
-    else:
-        pyautogui.mouseDown(x, y, button=btn)
+    return _with_fallback(
+        lambda: (pydirectinput.moveTo(x, y), pydirectinput.mouseDown(button=btn)),
+        lambda: pyautogui.mouseDown(x, y, button=btn),
+    )
 
 def mouse_up(x, y, btn="left"):
-    if USE_DIRECT_INPUT:
-        pydirectinput.moveTo(x, y)
-        pydirectinput.mouseUp(button=btn)
-    else:
-        pyautogui.mouseUp(x, y, button=btn)
+    return _with_fallback(
+        lambda: (pydirectinput.moveTo(x, y), pydirectinput.mouseUp(button=btn)),
+        lambda: pyautogui.mouseUp(x, y, button=btn),
+    )
 
 def mouse_click(x, y, btn="left"):
-    if USE_DIRECT_INPUT:
-        pydirectinput.click(x=x, y=y, button=btn)
-    else:
-        pyautogui.click(x, y, button=btn)
+    return _with_fallback(
+        lambda: pydirectinput.click(x=x, y=y, button=btn),
+        lambda: pyautogui.click(x, y, button=btn),
+    )
 
 def mouse_double(x, y):
-    if USE_DIRECT_INPUT:
-        pydirectinput.doubleClick(x=x, y=y)
-    else:
-        pyautogui.doubleClick(x, y)
+    return _with_fallback(
+        lambda: pydirectinput.doubleClick(x=x, y=y),
+        lambda: pyautogui.doubleClick(x, y),
+    )
 
 def mouse_scroll(delta):
-    if USE_DIRECT_INPUT:
-        pydirectinput.scroll(delta)
-    else:
-        pyautogui.scroll(delta)
+    return _with_fallback(
+        lambda: pydirectinput.scroll(delta),
+        lambda: pyautogui.scroll(delta),
+    )
 
 def key_tap(k):
-    if USE_DIRECT_INPUT:
-        pydirectinput.press(k)
-    else:
-        pyautogui.press(k)
+    return _with_fallback(
+        lambda: pydirectinput.press(k),
+        lambda: pyautogui.press(k),
+    )
 
 def key_combo(*keys):
-    if USE_DIRECT_INPUT:
-        pydirectinput.hotkey(*keys)
-    else:
-        pyautogui.hotkey(*keys)
+    return _with_fallback(
+        lambda: pydirectinput.hotkey(*keys),
+        lambda: pyautogui.hotkey(*keys),
+    )
 
 # ===== 소켓 유틸 =====
 def send_msg(sock, data: bytes):
