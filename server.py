@@ -1,6 +1,6 @@
 # remote_server_v2_4_stable.py
 # 필요한 패키지(수동 설치 권장): pillow pyautogui pyperclip pydirectinput
-import socket, threading, struct, io, json, subprocess, sys, time
+import socket, threading, struct, io, json, subprocess, sys, time, ctypes
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
 
@@ -60,6 +60,64 @@ ENABLE_SHELL = False  # 기본 OFF
 
 # 게임 호환 입력 모드 (리니지/DirectX 게임 대응)
 USE_DIRECT_INPUT = pydirectinput is not None
+# 윈도우 SendInput 사용(게임 호환성 향상)
+USE_WIN_SENDINPUT = True
+
+# ---- Win32 SendInput (마우스) ----
+INPUT_MOUSE = 0
+MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP = 0x0010
+MOUSEEVENTF_WHEEL = 0x0800
+MOUSEEVENTF_ABSOLUTE = 0x8000
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", ctypes.c_long),
+        ("dy", ctypes.c_long),
+        ("mouseData", ctypes.c_ulong),
+        ("dwFlags", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+    ]
+
+class INPUT(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_ulong), ("mi", MOUSEINPUT)]
+
+
+def _screen_size():
+    u32 = ctypes.windll.user32
+    return u32.GetSystemMetrics(0), u32.GetSystemMetrics(1)
+
+
+def _to_absolute(x, y):
+    sw, sh = _screen_size()
+    ax = int(x * 65535 / max(1, sw - 1))
+    ay = int(y * 65535 / max(1, sh - 1))
+    return ax, ay
+
+
+def _send_mouse(flags, x=None, y=None, data=0):
+    if x is not None and y is not None:
+        ax, ay = _to_absolute(int(x), int(y))
+        flags |= MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE
+    else:
+        ax, ay = 0, 0
+
+    inp = INPUT(
+        type=INPUT_MOUSE,
+        mi=MOUSEINPUT(
+            dx=ax,
+            dy=ay,
+            mouseData=data,
+            dwFlags=flags,
+            time=0,
+            dwExtraInfo=None,
+        ),
+    )
+    ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
 def _with_fallback(direct_fn, auto_fn):
     if USE_DIRECT_INPUT and pydirectinput is not None:
@@ -70,36 +128,56 @@ def _with_fallback(direct_fn, auto_fn):
     return auto_fn()
 
 def mouse_move(x, y):
+    if USE_WIN_SENDINPUT:
+        return _send_mouse(0, x, y)
     return _with_fallback(
         lambda: pydirectinput.moveTo(x, y),
         lambda: pyautogui.moveTo(x, y),
     )
 
 def mouse_down(x, y, btn="left"):
+    if USE_WIN_SENDINPUT:
+        if btn == "right":
+            return _send_mouse(MOUSEEVENTF_RIGHTDOWN, x, y)
+        return _send_mouse(MOUSEEVENTF_LEFTDOWN, x, y)
     return _with_fallback(
         lambda: (pydirectinput.moveTo(x, y), pydirectinput.mouseDown(button=btn)),
         lambda: pyautogui.mouseDown(x, y, button=btn),
     )
 
 def mouse_up(x, y, btn="left"):
+    if USE_WIN_SENDINPUT:
+        if btn == "right":
+            return _send_mouse(MOUSEEVENTF_RIGHTUP, x, y)
+        return _send_mouse(MOUSEEVENTF_LEFTUP, x, y)
     return _with_fallback(
         lambda: (pydirectinput.moveTo(x, y), pydirectinput.mouseUp(button=btn)),
         lambda: pyautogui.mouseUp(x, y, button=btn),
     )
 
 def mouse_click(x, y, btn="left"):
+    if USE_WIN_SENDINPUT:
+        mouse_down(x, y, btn)
+        time.sleep(0.01)
+        return mouse_up(x, y, btn)
     return _with_fallback(
         lambda: pydirectinput.click(x=x, y=y, button=btn),
         lambda: pyautogui.click(x, y, button=btn),
     )
 
 def mouse_double(x, y):
+    if USE_WIN_SENDINPUT:
+        mouse_click(x, y, "left")
+        time.sleep(0.02)
+        return mouse_click(x, y, "left")
     return _with_fallback(
         lambda: pydirectinput.doubleClick(x=x, y=y),
         lambda: pyautogui.doubleClick(x, y),
     )
 
 def mouse_scroll(delta):
+    if USE_WIN_SENDINPUT:
+        return _send_mouse(MOUSEEVENTF_WHEEL, data=int(delta) * 120)
     return _with_fallback(
         lambda: pydirectinput.scroll(delta),
         lambda: pyautogui.scroll(delta),
