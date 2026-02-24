@@ -14,6 +14,9 @@ CMD_PORT = 9999
 SCR_PORT = 9998
 AUTH_TOKEN = "CHANGE_ME_STRONG_TOKEN_32+"  # 서버와 동일하게
 
+# 게임 호환 모드: 클릭을 down/up 분리 대신 단일 click 이벤트로 전송
+GAME_COMPAT_CLICK = True
+
 def send_msg(sock, data: bytes):
     sock.sendall(struct.pack(">I", len(data)) + data)
 
@@ -327,9 +330,14 @@ class ClientApp:
     def _md(self, e, btn):
         self.canvas.focus_set()
         x, y = self._to_srv(e.x, e.y)
-        self._send({"action":"mouse_down", "x":x, "y":y, "btn":btn})
+        if GAME_COMPAT_CLICK:
+            self._send({"action":"mouse_click", "x":x, "y":y, "btn":btn})
+        else:
+            self._send({"action":"mouse_down", "x":x, "y":y, "btn":btn})
 
     def _mu(self, e, btn):
+        if GAME_COMPAT_CLICK:
+            return
         x, y = self._to_srv(e.x, e.y)
         self._send({"action":"mouse_up", "x":x, "y":y, "btn":btn})
 

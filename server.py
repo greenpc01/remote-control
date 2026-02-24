@@ -1,5 +1,5 @@
-# remote_server_v2_1.py
-# pip install pillow pyautogui pyperclip
+# remote_server_v2_2.py
+# pip install pillow pyautogui pyperclip pydirectinput
 import socket, threading, struct, io, json, subprocess, sys, time
 import tkinter as tk
 from tkinter import scrolledtext
@@ -8,14 +8,18 @@ try:
     from PIL import ImageGrab
     import pyautogui
     import pyperclip
+    import pydirectinput
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pillow", "pyautogui", "pyperclip"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pillow", "pyautogui", "pyperclip", "pydirectinput"])
     from PIL import ImageGrab
     import pyautogui
     import pyperclip
+    import pydirectinput
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
+pydirectinput.FAILSAFE = False
+pydirectinput.PAUSE = 0
 
 HOST = "0.0.0.0"
 CMD_PORT = 9999
@@ -27,6 +31,59 @@ ALLOW_IP_PREFIXES = ["127.", "192.168.", "10.", "172.16.", "172.17.", "172.18.",
                      "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
                      "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31."]
 ENABLE_SHELL = False  # 기본 OFF
+
+# 게임 호환 입력 모드 (리니지/DirectX 게임 대응)
+USE_DIRECT_INPUT = True
+
+def mouse_move(x, y):
+    if USE_DIRECT_INPUT:
+        pydirectinput.moveTo(x, y)
+    else:
+        pyautogui.moveTo(x, y)
+
+def mouse_down(x, y, btn="left"):
+    if USE_DIRECT_INPUT:
+        pydirectinput.moveTo(x, y)
+        pydirectinput.mouseDown(button=btn)
+    else:
+        pyautogui.mouseDown(x, y, button=btn)
+
+def mouse_up(x, y, btn="left"):
+    if USE_DIRECT_INPUT:
+        pydirectinput.moveTo(x, y)
+        pydirectinput.mouseUp(button=btn)
+    else:
+        pyautogui.mouseUp(x, y, button=btn)
+
+def mouse_click(x, y, btn="left"):
+    if USE_DIRECT_INPUT:
+        pydirectinput.click(x=x, y=y, button=btn)
+    else:
+        pyautogui.click(x, y, button=btn)
+
+def mouse_double(x, y):
+    if USE_DIRECT_INPUT:
+        pydirectinput.doubleClick(x=x, y=y)
+    else:
+        pyautogui.doubleClick(x, y)
+
+def mouse_scroll(delta):
+    if USE_DIRECT_INPUT:
+        pydirectinput.scroll(delta)
+    else:
+        pyautogui.scroll(delta)
+
+def key_tap(k):
+    if USE_DIRECT_INPUT:
+        pydirectinput.press(k)
+    else:
+        pyautogui.press(k)
+
+def key_combo(*keys):
+    if USE_DIRECT_INPUT:
+        pydirectinput.hotkey(*keys)
+    else:
+        pyautogui.hotkey(*keys)
 
 # ===== 소켓 유틸 =====
 def send_msg(sock, data: bytes):
@@ -129,34 +186,39 @@ def cmd_thread(conn, app_log, stop_evt):
             a = cmd.get("action", "")
 
             if a == "mouse_move":
-                pyautogui.moveTo(int(cmd["x"]), int(cmd["y"]))
+                mouse_move(int(cmd["x"]), int(cmd["y"]))
             elif a == "mouse_click":
-                pyautogui.click(int(cmd["x"]), int(cmd["y"]), button=cmd.get("btn", "left"))
+                mouse_click(int(cmd["x"]), int(cmd["y"]), cmd.get("btn", "left"))
             elif a == "mouse_down":
-                pyautogui.mouseDown(int(cmd["x"]), int(cmd["y"]), button=cmd.get("btn", "left"))
+                mouse_down(int(cmd["x"]), int(cmd["y"]), cmd.get("btn", "left"))
             elif a == "mouse_up":
-                pyautogui.mouseUp(int(cmd["x"]), int(cmd["y"]), button=cmd.get("btn", "left"))
+                mouse_up(int(cmd["x"]), int(cmd["y"]), cmd.get("btn", "left"))
             elif a == "mouse_double":
-                pyautogui.doubleClick(int(cmd["x"]), int(cmd["y"]))
+                mouse_double(int(cmd["x"]), int(cmd["y"]))
             elif a == "mouse_scroll":
-                pyautogui.scroll(int(cmd.get("delta", 3)))
+                mouse_scroll(int(cmd.get("delta", 3)))
 
             elif a == "key_press":
                 k = cmd.get("key", "")
                 sk = SPECIAL.get(k.lower())
                 if sk:
-                    pyautogui.press(sk)
+                    key_tap(sk)
                 elif len(k) == 1:
-                    prev = pyperclip.paste()
-                    pyperclip.copy(k)
-                    pyautogui.hotkey("ctrl", "v")
-                    time.sleep(0.03)
-                    pyperclip.copy(prev)
+                    # 게임 창에서는 Ctrl+V보다 직접 키 입력이 안정적
+                    ch = k.lower()
+                    if ch.isalnum() or ch in "`-=[]\\;',./":
+                        key_tap(ch)
+                    else:
+                        prev = pyperclip.paste()
+                        pyperclip.copy(k)
+                        key_combo("ctrl", "v")
+                        time.sleep(0.03)
+                        pyperclip.copy(prev)
 
             elif a == "key_combo":
                 keys = cmd.get("keys", [])
                 if keys:
-                    pyautogui.hotkey(*keys)
+                    key_combo(*keys)
 
             elif a == "shell":
                 if not ENABLE_SHELL:
