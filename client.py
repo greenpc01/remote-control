@@ -1,6 +1,6 @@
 # remote_client_v2_1.py
 # pip install pillow
-import socket, threading, struct, io, json, subprocess, sys, time
+import socket, threading, struct, io, json, subprocess, sys, time, shutil
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
 
@@ -12,7 +12,21 @@ except ImportError:
 
 CMD_PORT = 9999
 SCR_PORT = 9998
+VIDEO_PORT = 9997
 AUTH_TOKEN = "CHANGE_ME_STRONG_TOKEN_32+"  # 서버와 동일하게
+
+USE_H264_STREAM = True
+
+
+def ensure_ffplay():
+    if shutil.which("ffplay"):
+        return True
+    try:
+        subprocess.run(["winget", "install", "-e", "--id", "Gyan.FFmpeg", "--accept-package-agreements", "--accept-source-agreements"],
+                       check=False, capture_output=True, text=True, timeout=180)
+    except Exception:
+        pass
+    return shutil.which("ffplay") is not None
 
 # 게임 호환 모드: 클릭을 down/up 분리 대신 단일 click 이벤트로 전송
 GAME_COMPAT_CLICK = True
@@ -50,6 +64,7 @@ class ClientApp:
         self.cmd_sock = None
         self.scr_sock = None
         self.connected = False
+        self.video_proc = None
 
         self.srv_w = 1920
         self.srv_h = 1080
@@ -200,25 +215,32 @@ class ClientApp:
             self.cmd_sock.connect((ip, CMD_PORT))
             self.cmd_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-            self.scr_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.scr_sock.settimeout(5)
-            self.scr_sock.connect((ip, SCR_PORT))
-            self.scr_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
             if not self._auth(self.cmd_sock, "cmd"):
                 raise RuntimeError("CMD 인증 실패")
-            if not self._auth(self.scr_sock, "scr"):
-                raise RuntimeError("SCR 인증 실패")
 
             self.cmd_sock.settimeout(None)
-            self.scr_sock.settimeout(None)
 
             self.connected = True
             self.st_var.set(f"🟢 연결됨: {ip}")
             self.b_conn.configure(state="disabled")
             self.b_disc.configure(state="normal")
 
-            threading.Thread(target=self._scr_loop, daemon=True).start()
+            use_h264 = USE_H264_STREAM and ensure_ffplay()
+            if USE_H264_STREAM and not use_h264:
+                messagebox.showwarning("H264 비활성", "ffplay 설치 실패/미탐지로 JPEG 모드로 전환합니다.")
+
+            if use_h264:
+                self._start_h264_viewer(ip)
+            else:
+                self.scr_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.scr_sock.settimeout(5)
+                self.scr_sock.connect((ip, SCR_PORT))
+                self.scr_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                if not self._auth(self.scr_sock, "scr"):
+                    raise RuntimeError("SCR 인증 실패")
+                self.scr_sock.settimeout(None)
+                threading.Thread(target=self._scr_loop, daemon=True).start()
+
             threading.Thread(target=self._cmd_loop, daemon=True).start()
 
         except Exception as e:
@@ -238,6 +260,12 @@ class ClientApp:
                 pass
         self.cmd_sock = None
         self.scr_sock = None
+        if self.video_proc:
+            try:
+                self.video_proc.terminate()
+            except:
+                pass
+            self.video_proc = None
 
         self.st_var.set("⏹ 연결 안됨")
         self.fps_var.set("")
@@ -311,6 +339,19 @@ class ClientApp:
                     self._result_evt.set()
             except Exception:
                 break
+
+    def _start_h264_viewer(self, ip):
+        # ffplay로 저지연 H.264 수신 (별도 창)
+        cmd = [
+            "ffplay", "-fflags", "nobuffer", "-flags", "low_delay",
+            "-framedrop", "-strict", "experimental",
+            f"tcp://{ip}:{VIDEO_PORT}?listen=0",
+        ]
+        try:
+            self.video_proc = subprocess.Popen(cmd)
+            self.st_var.set(f"🟢 연결됨(H264): {ip}")
+        except Exception as e:
+            messagebox.showwarning("H264 뷰어", f"ffplay 실행 실패: {e}\nffmpeg 설치 후 다시 시도하세요.")
 
     def _send(self, obj):
         if not self.connected or not self.cmd_sock:

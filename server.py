@@ -1,6 +1,6 @@
 # remote_server_v2_4_stable.py
 # 필요한 패키지(수동 설치 권장): pillow pyautogui pyperclip pydirectinput
-import socket, threading, struct, io, json, subprocess, sys, time, ctypes
+import socket, threading, struct, io, json, subprocess, sys, time, ctypes, shutil
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
 
@@ -50,6 +50,27 @@ if pydirectinput is not None:
 HOST = "0.0.0.0"
 CMD_PORT = 9999
 SCR_PORT = 9998
+VIDEO_PORT = 9997  # H.264(하드웨어 인코더) 스트림 포트
+
+USE_H264_STREAM = True
+VIDEO_FPS = 15
+VIDEO_BITRATE = "5M"
+
+
+def ensure_ffmpeg(app_log=None):
+    if shutil.which("ffmpeg"):
+        return True
+    try:
+        if app_log:
+            app_log("ffmpeg 없음 -> winget 자동 설치 시도")
+        subprocess.run(["winget", "install", "-e", "--id", "Gyan.FFmpeg", "--accept-package-agreements", "--accept-source-agreements"],
+                       check=False, capture_output=True, text=True, timeout=180)
+    except Exception:
+        pass
+    ok = shutil.which("ffmpeg") is not None
+    if app_log:
+        app_log("ffmpeg 설치 성공" if ok else "ffmpeg 설치 실패(기존 JPEG 모드로 동작)")
+    return ok
 
 # ===== 보안/정책 =====
 AUTH_TOKEN = "CHANGE_ME_STRONG_TOKEN_32+"  # 반드시 변경
@@ -259,6 +280,64 @@ def get_lan_ip():
     finally:
         s.close()
 
+
+def _h264_ffmpeg_cmd(encoder: str):
+    # gdigrab + hw encoder (NVENC/QSV/AMF), fallback libx264
+    base = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-f", "gdigrab", "-framerate", str(VIDEO_FPS), "-i", "desktop",
+        "-an", "-pix_fmt", "yuv420p",
+    ]
+    if encoder == "h264_nvenc":
+        enc = ["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-b:v", VIDEO_BITRATE, "-g", "30"]
+    elif encoder == "h264_qsv":
+        enc = ["-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", VIDEO_BITRATE, "-g", "30"]
+    elif encoder == "h264_amf":
+        enc = ["-c:v", "h264_amf", "-quality", "speed", "-b:v", VIDEO_BITRATE, "-g", "30"]
+    else:
+        enc = ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-b:v", VIDEO_BITRATE, "-g", "30"]
+
+    return base + enc + ["-f", "mpegts", "pipe:1"]
+
+
+def video_thread(conn, app_log, stop_evt):
+    app_log("H.264 스트리밍 시작")
+    candidates = ["h264_nvenc", "h264_qsv", "h264_amf", "libx264"]
+    proc = None
+    chosen = None
+
+    for enc in candidates:
+        try:
+            cmd = _h264_ffmpeg_cmd(enc)
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            time.sleep(0.8)
+            if p.poll() is None:
+                proc = p
+                chosen = enc
+                break
+            p.kill()
+        except Exception:
+            continue
+
+    if proc is None:
+        app_log("ffmpeg 인코더 시작 실패(설치/드라이버 확인)")
+        return
+
+    app_log(f"H.264 인코더: {chosen}")
+    try:
+        while not stop_evt.is_set():
+            chunk = proc.stdout.read(32 * 1024)
+            if not chunk:
+                break
+            conn.sendall(chunk)
+    except Exception as e:
+        app_log(f"H.264 스트리밍 종료: {e}")
+    finally:
+        try:
+            proc.kill()
+        except:
+            pass
+
 # ===== 화면 스트리밍 =====
 def screen_thread(conn, app_log, stop_evt):
     app_log("화면 스트리밍 시작")
@@ -380,7 +459,7 @@ class ServerApp:
         ip = get_lan_ip()
         tk.Label(f, text=f"내 IP 주소: {ip}", bg="#313244", fg="#a6e3a1",
                  font=("Consolas", 12, "bold")).pack(anchor="w")
-        tk.Label(f, text=f"포트: CMD={CMD_PORT} | SCREEN={SCR_PORT}", bg="#313244",
+        tk.Label(f, text=f"포트: CMD={CMD_PORT} | SCREEN={SCR_PORT} | H264={VIDEO_PORT}", bg="#313244",
                  fg="#cdd6f4", font=("Consolas", 10)).pack(anchor="w", pady=(4, 0))
         tk.Label(f, text=f"Shell: {'ON' if ENABLE_SHELL else 'OFF'} / 인증토큰 필요",
                  bg="#313244", fg="#f9e2af", font=("Consolas", 9)).pack(anchor="w", pady=(4, 0))
@@ -417,6 +496,10 @@ class ServerApp:
     def start(self):
         if self.running:
             return
+        global USE_H264_STREAM
+        if USE_H264_STREAM and not ensure_ffmpeg(self.log):
+            USE_H264_STREAM = False
+
         self.running = True
         self.stop_evt.clear()
         self.b_start.configure(state="disabled")
@@ -424,6 +507,8 @@ class ServerApp:
         self.sv.set("🟢 실행 중 - 연결 대기...")
         threading.Thread(target=self._listen, args=(CMD_PORT, False), daemon=True).start()
         threading.Thread(target=self._listen, args=(SCR_PORT, True), daemon=True).start()
+        if USE_H264_STREAM:
+            threading.Thread(target=self._listen_video, daemon=True).start()
         self.log("서버 시작됨")
 
     def stop(self):
@@ -502,6 +587,44 @@ class ServerApp:
 
         try: srv.close()
         except: pass
+
+    def _listen_video(self):
+        name = "H264"
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind((HOST, VIDEO_PORT))
+        srv.listen(2)
+        srv.settimeout(1.0)
+        self.servers.append(srv)
+        self.log(f"{name} 포트 {VIDEO_PORT} 대기 중...")
+
+        while self.running and not self.stop_evt.is_set():
+            try:
+                conn, addr = srv.accept()
+                ip = addr[0]
+                if not allowed_ip(ip):
+                    self.log(f"차단됨(IP): {ip} ({name})")
+                    conn.close()
+                    continue
+
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                with self.client_lock:
+                    self.client_socks.add(conn)
+
+                self.log(f"연결됨: {ip} ({name})")
+                threading.Thread(target=self._client_worker, args=(video_thread, conn), daemon=True).start()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            except Exception as e:
+                if self.running:
+                    self.log(f"오류({name}): {e}")
+
+        try:
+            srv.close()
+        except:
+            pass
 
     def _client_worker(self, fn, conn):
         try:
